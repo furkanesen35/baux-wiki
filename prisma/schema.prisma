@@ -1,0 +1,66 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Document {
+  id          String   @id @default(cuid())
+  title       String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Hierarchical structure
+  parentId    String?
+  parent      Document?  @relation("DocumentHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children    Document[] @relation("DocumentHierarchy")
+  
+  // Content blocks
+  blocks      ContentBlock[]
+
+  @@index([title])
+  @@index([createdAt])
+  @@index([parentId])
+  @@map("documents")
+}
+
+model ContentBlock {
+  id         String   @id @default(cuid())
+  type       String   // 'text', 'heading', 'list', etc.
+  content    String   @db.Text
+  order      Int      // For ordering blocks
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  
+  // Optional attached file
+  attachment UploadedFile?
+
+  @@index([documentId, order])
+  @@map("content_blocks")
+}
+
+model UploadedFile {
+  id          String   @id @default(cuid())
+  filename    String   // Original filename
+  storedName  String   // Name on disk (UUID-based)
+  mimeType    String   // e.g. 'image/png', 'application/pdf'
+  size        Int      // File size in bytes
+  path        String   // Relative path to file
+  createdAt   DateTime @default(now())
+  
+  // Link to content block (not document)
+  blockId     String?  @unique
+  block       ContentBlock? @relation(fields: [blockId], references: [id], onDelete: Cascade)
+
+  @@index([mimeType])
+  @@map("uploaded_files")
+}
