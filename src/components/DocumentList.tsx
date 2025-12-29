@@ -53,6 +53,32 @@ export default function DocumentList({
     }
   }
 
+  const handleDeletePage = async (pageId: string, pageTitle: string): Promise<void> => {
+    const confirmed = window.confirm(`Are you sure you want to delete "${pageTitle}"?\n\nThis will also delete all subpages and content blocks.`)
+    
+    if (!confirmed) return
+    
+    try {
+      const response = await fetch(`/api/documents/${pageId}`, {
+        method: 'DELETE',
+      })
+      
+      if (response.ok) {
+        // If we deleted the currently selected page, clear selection
+        if (selectedPageId === pageId) {
+          onSelectPage?.(null, null)
+        }
+        // Refresh the document list
+        fetchDocuments()
+      } else {
+        alert('Failed to delete page')
+      }
+    } catch (error) {
+      console.error('Error deleting page:', error)
+      alert('Error deleting page')
+    }
+  }
+
   const toggleExpand = (id: string): void => {
     const newExpanded = new Set(expandedPages)
     if (newExpanded.has(id)) {
@@ -121,6 +147,16 @@ export default function DocumentList({
                 >
                   + Sub
                 </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleDeletePage(doc.id, doc.title)
+                  }}
+                  className="opacity-0 group-hover:opacity-100 text-xs text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-900/30 flex-shrink-0"
+                  title="Delete page"
+                >
+                  🗑️
+                </button>
               </div>
               
               {doc.children && doc.children.length > 0 && expandedPages.has(doc.id) && (
@@ -128,14 +164,26 @@ export default function DocumentList({
                   {doc.children.map((child) => (
                     <div
                       key={child.id}
-                      onClick={() => onSelectPage?.(child.id, child.title)}
-                      className={`flex items-center gap-2 p-2 rounded hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer ${
+                      className={`flex items-center gap-2 p-2 rounded hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer group ${
                         selectedPageId === child.id ? 'bg-blue-50 dark:bg-blue-900/30' : ''
                       }`}
                     >
-                      <span className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 truncate">
+                      <span
+                        onClick={() => onSelectPage?.(child.id, child.title)}
+                        className="flex-1 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 truncate"
+                      >
                         📑 {child.title}
                       </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleDeletePage(child.id, child.title)
+                        }}
+                        className="opacity-0 group-hover:opacity-100 text-xs text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-900/30 flex-shrink-0"
+                        title="Delete page"
+                      >
+                        🗑️
+                      </button>
                     </div>
                   ))}
                 </div>

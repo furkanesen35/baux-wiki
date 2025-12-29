@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import DocumentList from '@/components/DocumentList'
 import UploadForm from '@/components/UploadForm'
 import SearchBar from '@/components/SearchBar'
@@ -13,11 +13,56 @@ export default function Home() {
   const [selectedPageTitle, setSelectedPageTitle] = useState<string | null>(null)
   const [parentIdForNewPage, setParentIdForNewPage] = useState<string | null>(null)
   const [parentTitleForNewPage, setParentTitleForNewPage] = useState<string | null>(null)
+  const [pendingBlockId, setPendingBlockId] = useState<string | null>(null)
+
+  // Handle URL hash on initial load
+  useEffect(() => {
+    const hash = window.location.hash
+    if (hash) {
+      // Format: #pageId or #pageId:blockId
+      const parts = hash.slice(1).split(':')
+      const pageId = parts[0]
+      const blockId = parts[1] || null
+      
+      if (pageId) {
+        setSelectedPageId(pageId)
+        if (blockId) {
+          setPendingBlockId(blockId)
+        }
+      }
+    }
+  }, [])
 
   const handleSelectPage = (pageId: string | null, pageTitle?: string | null): void => {
     setSelectedPageId(pageId)
     setSelectedPageTitle(pageTitle || null)
+    // Update URL hash when page changes
+    if (pageId) {
+      window.history.pushState(null, '', `#${pageId}`)
+    } else {
+      window.history.pushState(null, '', window.location.pathname)
+    }
   }
+
+  // Navigate to a specific page and block (used by internal wiki links)
+  const handleNavigateToBlock = useCallback((pageId: string, blockId: string): void => {
+    if (pageId === selectedPageId) {
+      // Same page - just scroll to block
+      const element = document.getElementById(blockId)
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        element.classList.add('ring-2', 'ring-blue-500', 'ring-offset-2')
+        setTimeout(() => {
+          element.classList.remove('ring-2', 'ring-blue-500', 'ring-offset-2')
+        }, 2000)
+      }
+    } else {
+      // Different page - navigate and set pending block
+      setSelectedPageId(pageId)
+      setPendingBlockId(blockId)
+      window.history.pushState(null, '', `#${pageId}:${blockId}`)
+    }
+  }, [selectedPageId])
 
   const handleCreateSubpage = (parentId: string, parentTitle: string): void => {
     setParentIdForNewPage(parentId)
@@ -79,7 +124,12 @@ export default function Home() {
               </div>
             </div>
           ) : (
-            <PageContent pageId={selectedPageId} />
+            <PageContent 
+              pageId={selectedPageId} 
+              pendingBlockId={pendingBlockId}
+              onBlockScrolled={() => setPendingBlockId(null)}
+              onNavigateToBlock={handleNavigateToBlock}
+            />
           )}
         </div>
       </main>

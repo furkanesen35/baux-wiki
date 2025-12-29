@@ -4,6 +4,9 @@ import { useEffect, useState, useRef } from 'react'
 
 interface PageContentProps {
   pageId: string
+  pendingBlockId?: string | null
+  onBlockScrolled?: () => void
+  onNavigateToBlock?: (pageId: string, blockId: string) => void
 }
 
 interface UploadedFile {
@@ -35,7 +38,22 @@ interface Document {
   blocks: ContentBlock[]
 }
 
-export default function PageContent({ pageId }: PageContentProps) {
+// Helper function to convert plain URLs into clickable links
+const linkifyContent = (html: string): string => {
+  // Don't process if it's empty or already has links for this URL
+  if (!html) return html
+  
+  // Match URLs that are not already inside an href or <a> tag
+  // This regex matches URLs not preceded by " or >
+  const urlRegex = /(?<!href=")(?<!>)(https?:\/\/[^\s<"]+)/gi
+  
+  return html.replace(urlRegex, (url) => {
+    // Check if this URL is already part of an anchor tag
+    return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="text-blue-600 dark:text-blue-400 hover:underline">${url}</a>`
+  })
+}
+
+export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, onNavigateToBlock }: PageContentProps) {
   const [page, setPage] = useState<Document | null>(null)
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null)
   const [editContent, setEditContent] = useState('')
@@ -56,6 +74,63 @@ export default function PageContent({ pageId }: PageContentProps) {
   useEffect(() => {
     fetchPage()
   }, [pageId])
+
+  // Scroll to pending block when page loads
+  useEffect(() => {
+    if (page && pendingBlockId) {
+      const element = document.getElementById(pendingBlockId)
+      if (element) {
+        setTimeout(() => {
+          element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          // Highlight the block briefly
+          element.classList.add('ring-2', 'ring-blue-500', 'ring-offset-2')
+          setTimeout(() => {
+            element.classList.remove('ring-2', 'ring-blue-500', 'ring-offset-2')
+          }, 2000)
+          onBlockScrolled?.()
+        }, 100)
+      }
+    }
+  }, [page, pendingBlockId, onBlockScrolled])
+
+  // Handle clicks on internal wiki links
+  useEffect(() => {
+    const handleLinkClick = (e: MouseEvent): void => {
+      const target = e.target as HTMLElement
+      const anchor = target.closest('a')
+      
+      if (anchor && anchor.href) {
+        const url = new URL(anchor.href)
+        
+        // Check if it's an internal wiki link (same origin with hash)
+        if (url.origin === window.location.origin && url.hash) {
+          const hash = url.hash.slice(1) // Remove #
+          const parts = hash.split(':')
+          
+          if (parts.length === 2) {
+            // Format: #pageId:blockId
+            e.preventDefault()
+            const [targetPageId, targetBlockId] = parts
+            onNavigateToBlock?.(targetPageId, targetBlockId)
+          } else if (parts.length === 1 && parts[0].length > 10) {
+            // Looks like a block ID on current page
+            e.preventDefault()
+            const element = document.getElementById(parts[0])
+            if (element) {
+              element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+              element.classList.add('ring-2', 'ring-blue-500', 'ring-offset-2')
+              setTimeout(() => {
+                element.classList.remove('ring-2', 'ring-blue-500', 'ring-offset-2')
+              }, 2000)
+            }
+          }
+        }
+      }
+    }
+    
+    document.addEventListener('click', handleLinkClick)
+    return () => document.removeEventListener('click', handleLinkClick)
+  }, [onNavigateToBlock])
 
   // Hide toolbar when clicking outside content blocks
   useEffect(() => {
@@ -479,7 +554,8 @@ export default function PageContent({ pageId }: PageContentProps) {
             {page.blocks.map((block) => (
               <div
                 key={block.id}
-                className="group relative"
+                id={block.id}
+                className="group relative scroll-mt-4 transition-all duration-300"
               >
                 {editingBlockId === block.id ? (
                   <div className="space-y-3">
@@ -575,6 +651,21 @@ export default function PageContent({ pageId }: PageContentProps) {
                       >
                         1. List
                       </button>
+                      <div className="w-px bg-gray-300 dark:bg-gray-600 mx-1"></div>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          const url = prompt('Enter URL:', 'https://')
+                          if (url) {
+                            formatText('createLink', url)
+                          }
+                        }}
+                        className="px-3 py-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded text-blue-600 dark:text-blue-400"
+                        title="Insert Link"
+                      >
+                        🔗 Link
+                      </button>
                     </div>
 
                     {/* Rich Text Editor */}
@@ -660,8 +751,8 @@ export default function PageContent({ pageId }: PageContentProps) {
                       <div
                         ref={(el) => { blockRefs.current[block.id] = el }}
                         onMouseUp={() => handleTextSelection(block.id)}
-                        className="prose dark:prose-invert max-w-none prose-headings:text-gray-900 dark:prose-headings:text-gray-100 prose-p:text-gray-900 dark:prose-p:text-gray-100 cursor-text"
-                        dangerouslySetInnerHTML={{ __html: block.content || '<p class="text-gray-400 dark:text-gray-500 italic">Empty block - click edit to add content</p>' }}
+                        className="prose dark:prose-invert max-w-none prose-headings:text-gray-900 dark:prose-headings:text-gray-100 prose-p:text-gray-900 dark:prose-p:text-gray-100 cursor-text prose-a:text-blue-600 dark:prose-a:text-blue-400 prose-a:no-underline hover:prose-a:underline"
+                        dangerouslySetInnerHTML={{ __html: linkifyContent(block.content) || '<p class="text-gray-400 dark:text-gray-500 italic">Empty block - click edit to add content</p>' }}
                       />
                     </div>
                     
@@ -669,17 +760,21 @@ export default function PageContent({ pageId }: PageContentProps) {
                     {block.attachment && (
                       <div className="w-64 flex-shrink-0">
                         <div 
-                          onClick={() => setPreviewFile(block.attachment)}
-                          className="cursor-pointer rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 hover:border-blue-500 transition-colors"
+                          className="rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 hover:border-blue-500 transition-colors"
                         >
                           {block.attachment.mimeType.startsWith('image/') ? (
-                            <img 
-                              src={block.attachment.path} 
-                              alt={block.attachment.filename}
-                              className="w-full h-40 object-cover"
-                            />
+                            <div 
+                              onClick={() => setPreviewFile(block.attachment)}
+                              className="cursor-pointer"
+                            >
+                              <img 
+                                src={block.attachment.path} 
+                                alt={block.attachment.filename}
+                                className="w-full h-40 object-cover"
+                              />
+                            </div>
                           ) : (
-                            <div className="w-full h-40 bg-gray-100 dark:bg-gray-800 flex flex-col items-center justify-center p-4">
+                            <div className="w-full bg-gray-100 dark:bg-gray-800 flex flex-col items-center justify-center p-4">
                               <span className="text-4xl mb-2">
                                 {block.attachment.mimeType.includes('pdf') ? '📄' :
                                  block.attachment.mimeType.includes('word') ? '📝' :
@@ -687,9 +782,27 @@ export default function PageContent({ pageId }: PageContentProps) {
                                  block.attachment.mimeType.includes('powerpoint') || block.attachment.mimeType.includes('presentation') ? '📽️' :
                                  '📎'}
                               </span>
-                              <span className="text-xs text-gray-600 dark:text-gray-400 text-center truncate w-full">
+                              <span className="text-xs text-gray-600 dark:text-gray-400 text-center truncate w-full mb-3">
                                 {block.attachment.filename}
                               </span>
+                              <div className="flex gap-2">
+                                <a
+                                  href={`/api/files/${block.attachment.id}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 transition-colors"
+                                  title="Open file in new tab"
+                                >
+                                  🔗 Open
+                                </a>
+                                <a
+                                  href={`/api/files/${block.attachment.id}?download=true`}
+                                  className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 transition-colors"
+                                  title="Download file"
+                                >
+                                  ⬇️ Download
+                                </a>
+                              </div>
                             </div>
                           )}
                         </div>
@@ -698,6 +811,17 @@ export default function PageContent({ pageId }: PageContentProps) {
                     
                     {/* Action buttons */}
                     <div className="absolute -top-10 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
+                      <button
+                        onClick={() => {
+                          const url = `${window.location.origin}${window.location.pathname}#${pageId}:${block.id}`
+                          navigator.clipboard.writeText(url)
+                          alert('Link copied to clipboard!')
+                        }}
+                        className="bg-gray-600 dark:bg-gray-500 text-white px-3 py-1 rounded text-xs font-medium hover:bg-gray-700 dark:hover:bg-gray-600 transition-colors"
+                        title="Copy link to this block"
+                      >
+                        🔗 Link
+                      </button>
                       <button
                         onClick={() => handleStartEdit(block)}
                         className="bg-blue-600 dark:bg-blue-500 text-white px-3 py-1 rounded text-xs font-medium hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors"
@@ -817,15 +941,28 @@ export default function PageContent({ pageId }: PageContentProps) {
                    previewFile.mimeType.includes('powerpoint') || previewFile.mimeType.includes('presentation') ? '📽️' :
                    '📎'}
                 </span>
-                <p className="text-xl text-gray-900 dark:text-gray-100 mb-4">{previewFile.filename}</p>
-                <a
-                  href={previewFile.path}
-                  download={previewFile.filename}
-                  className="inline-block bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  ⬇️ Download
-                </a>
+                <p className="text-xl text-gray-900 dark:text-gray-100 mb-2">{previewFile.filename}</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+                  {(previewFile.size / 1024).toFixed(1)} KB
+                </p>
+                <div className="flex gap-4 justify-center">
+                  <a
+                    href={`/api/files/${previewFile.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    🔗 Open in New Tab
+                  </a>
+                  <a
+                    href={`/api/files/${previewFile.id}?download=true`}
+                    className="inline-flex items-center gap-2 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    ⬇️ Download
+                  </a>
+                </div>
               </div>
             )}
           </div>
@@ -879,6 +1016,40 @@ export default function PageContent({ pageId }: PageContentProps) {
           title="Underline"
         >
           U
+        </button>
+        <button
+          type="button"
+          onMouseDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            const url = prompt('Enter URL:', 'https://')
+            if (url && savedRangeRef.current) {
+              const selection = window.getSelection()
+              if (selection) {
+                selection.removeAllRanges()
+                selection.addRange(savedRangeRef.current)
+                document.execCommand('createLink', false, url)
+                // Save changes to block
+                const blockId = selectedBlockIdRef.current
+                if (blockId) {
+                  const blockRef = blockRefs.current[blockId]
+                  if (blockRef) {
+                    const content = blockRef.innerHTML
+                    fetch(`/api/blocks/${blockId}`, {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ content }),
+                    })
+                  }
+                }
+              }
+            }
+            hideFloatingToolbar()
+          }}
+          className="px-3 py-1 hover:bg-gray-700 dark:hover:bg-gray-300 rounded text-blue-400 dark:text-blue-600 text-sm"
+          title="Insert Link"
+        >
+          🔗
         </button>
       </div>
     </div>

@@ -29,6 +29,9 @@ export async function PUT(
         ...(type !== undefined && { type }),
         ...(order !== undefined && { order }),
       },
+      include: {
+        attachment: true,
+      },
     })
 
     return NextResponse.json(block)
