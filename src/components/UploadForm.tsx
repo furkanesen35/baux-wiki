@@ -49,7 +49,7 @@ export default function UploadForm({ parentId = null, parentTitle = null }: Uplo
   return (
     <div className="relative">
       <button
-        className="bg-blue-600 dark:bg-blue-500 text-white px-6 py-2 rounded-lg text-base font-medium hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors whitespace-nowrap"
+        className="bg-blue-600 dark:bg-blue-500 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors whitespace-nowrap"
         onClick={() => setIsOpen(!isOpen)}
       >
         {buttonText}
