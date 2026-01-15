@@ -8,7 +8,7 @@ interface Document {
   createdAt: string
   updatedAt: string
   parentId: string | null
-  children?: { id: string; title: string }[]
+  children?: Document[]
   blocks?: { id: string; content: string }[]
 }
 
@@ -37,15 +37,23 @@ export default function DocumentList({
 
   const fetchDocuments = async (): Promise<void> => {
     try {
+      // For tree view, fetch all documents with full hierarchy
+      // For cards view, fetch based on selected page
       const url = mode === 'tree' 
-        ? '/api/documents?parentId=null'
+        ? '/api/documents'
         : selectedPageId 
-        ? `/api/documents?parentId=${selectedPageId}`
+        ? `/api/documents/${selectedPageId}`
         : '/api/documents'
       
       const response = await fetch(url)
-      const data: Document[] = await response.json()
-      setDocuments(data)
+      const data = await response.json()
+      
+      // For cards view and single page, wrap in array
+      if (mode !== 'tree' && !Array.isArray(data)) {
+        setDocuments(data.children || [])
+      } else {
+        setDocuments(data)
+      }
     } catch (error) {
       console.error('Error fetching documents:', error)
     } finally {
@@ -93,10 +101,76 @@ export default function DocumentList({
     return <div className="text-center py-12 text-gray-600 text-lg">Loading...</div>
   }
 
+  // Recursive tree node component
+  const TreeNode = ({ doc, level = 0 }: { doc: Document; level?: number }): JSX.Element => {
+    const [isExpanded, setIsExpanded] = useState<boolean>(true)
+    const hasChildren = doc.children && doc.children.length > 0
+
+    return (
+      <div>
+        <div
+          className={`flex items-center gap-2 p-2 rounded hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer group ${
+            selectedPageId === doc.id ? 'bg-blue-50 dark:bg-blue-900/30' : ''
+          }`}
+          style={{ paddingLeft: `${level * 1.5 + 0.5}rem` }}
+        >
+          {hasChildren && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setIsExpanded(!isExpanded)
+              }}
+              className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 w-4 h-4 flex-shrink-0 text-xs"
+            >
+              {isExpanded ? '▼' : '▶'}
+            </button>
+          )}
+          {!hasChildren && <span className="w-4 flex-shrink-0"></span>}
+          
+          <span
+            onClick={() => onSelectPage?.(doc.id, doc.title)}
+            className="flex-1 text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 truncate"
+          >
+            {level === 0 ? '📄' : '📑'} {doc.title}
+          </span>
+          
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onCreateSubpage?.(doc.id, doc.title)
+            }}
+            className="opacity-0 group-hover:opacity-100 text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 px-2 py-1 rounded hover:bg-blue-50 dark:hover:bg-blue-900/30 flex-shrink-0"
+            title="Create subpage"
+          >
+            + Sub
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              handleDeletePage(doc.id, doc.title)
+            }}
+            className="opacity-0 group-hover:opacity-100 text-xs text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-900/30 flex-shrink-0"
+            title="Delete page"
+          >
+            🗑️
+          </button>
+        </div>
+        
+        {hasChildren && isExpanded && (
+          <div className="space-y-1">
+            {doc.children!.map((child) => (
+              <TreeNode key={child.id} doc={child} level={level + 1} />
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   // Tree view mode (sidebar)
   if (mode === 'tree') {
     return (
-      <div className="bg-gray-100 dark:bg-gray-800 border-2 border-gray-300 dark:border-gray-600 rounded-lg p-4 shadow-sm">
+      <div className="bg-gray-100 dark:bg-gray-800 border-2 border-gray-300 dark:border-gray-600 rounded-lg p-4 shadow-sm max-h-[calc(100vh-200px)] overflow-auto">
         <div className="flex justify-between items-center mb-4 pb-3 border-b-2 border-gray-300 dark:border-gray-600">
           <h2 className="text-lg font-bold text-gray-900 dark:text-white">Page Structure</h2>
           <button
@@ -109,86 +183,7 @@ export default function DocumentList({
         
         <div className="space-y-1">
           {documents.map((doc) => (
-            <div key={doc.id}>
-              <div
-                className={`flex items-center gap-2 p-2 rounded hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer group ${
-                  selectedPageId === doc.id ? 'bg-blue-50 dark:bg-blue-900/30' : ''
-                }`}
-              >
-                {doc.children && doc.children.length > 0 && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      toggleExpand(doc.id)
-                    }}
-                    className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 w-4 h-4 flex-shrink-0"
-                  >
-                    {expandedPages.has(doc.id) ? '▼' : '▶'}
-                  </button>
-                )}
-                {(!doc.children || doc.children.length === 0) && (
-                  <span className="w-4 flex-shrink-0"></span>
-                )}
-                
-                <span
-                  onClick={() => onSelectPage?.(doc.id, doc.title)}
-                  className="flex-1 text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 truncate"
-                >
-                  📄 {doc.title}
-                </span>
-                
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onCreateSubpage?.(doc.id, doc.title)
-                  }}
-                  className="opacity-0 group-hover:opacity-100 text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 px-2 py-1 rounded hover:bg-blue-50 dark:hover:bg-blue-900/30 flex-shrink-0"
-                  title="Create subpage"
-                >
-                  + Sub
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleDeletePage(doc.id, doc.title)
-                  }}
-                  className="opacity-0 group-hover:opacity-100 text-xs text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-900/30 flex-shrink-0"
-                  title="Delete page"
-                >
-                  🗑️
-                </button>
-              </div>
-              
-              {doc.children && doc.children.length > 0 && expandedPages.has(doc.id) && (
-                <div className="ml-6 space-y-1 mt-1">
-                  {doc.children.map((child) => (
-                    <div
-                      key={child.id}
-                      className={`flex items-center gap-2 p-2 rounded hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer group ${
-                        selectedPageId === child.id ? 'bg-blue-50 dark:bg-blue-900/30' : ''
-                      }`}
-                    >
-                      <span
-                        onClick={() => onSelectPage?.(child.id, child.title)}
-                        className="flex-1 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 truncate"
-                      >
-                        📑 {child.title}
-                      </span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleDeletePage(child.id, child.title)
-                        }}
-                        className="opacity-0 group-hover:opacity-100 text-xs text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-900/30 flex-shrink-0"
-                        title="Delete page"
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <TreeNode key={doc.id} doc={doc} level={0} />
           ))}
         </div>
         
