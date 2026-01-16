@@ -13,7 +13,7 @@ export async function GET(
         blocks: {
           orderBy: { order: 'asc' },
           include: {
-            attachment: true,
+            attachments: true,
           },
         },
       },

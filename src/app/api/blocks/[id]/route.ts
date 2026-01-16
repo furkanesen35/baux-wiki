@@ -30,7 +30,7 @@ export async function PUT(
         ...(order !== undefined && { order }),
       },
       include: {
-        attachment: true,
+        attachments: true,
       },
     })
 

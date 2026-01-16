@@ -29,7 +29,7 @@ interface ContentBlock {
   order: number
   createdAt: string
   updatedAt: string
-  attachment: UploadedFile | null
+  attachments: UploadedFile[]
 }
 
 interface Document {
@@ -83,6 +83,56 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
   }, [pageId])
 
   // Scroll to pending block when page loads
+  // Helper function to get all images from all blocks
+  const getAllImages = (): UploadedFile[] => {
+    if (!page) return []
+    const allImages: UploadedFile[] = []
+    page.blocks.forEach(block => {
+      block.attachments.forEach(attachment => {
+        if (attachment.mimeType.startsWith('image/')) {
+          allImages.push(attachment)
+        }
+      })
+    })
+    return allImages
+  }
+
+  // Navigate to next/previous image in preview
+  const navigatePreview = (direction: 'next' | 'prev'): void => {
+    if (!previewFile) return
+    const allImages = getAllImages()
+    const currentIndex = allImages.findIndex(img => img.id === previewFile.id)
+    if (currentIndex === -1) return
+    
+    let newIndex: number
+    if (direction === 'next') {
+      newIndex = (currentIndex + 1) % allImages.length
+    } else {
+      newIndex = (currentIndex - 1 + allImages.length) % allImages.length
+    }
+    setPreviewFile(allImages[newIndex])
+    setZoomLevel(100)
+  }
+
+  // Keyboard navigation for preview popup
+  useEffect(() => {
+    if (!previewFile) return
+    
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        setPreviewFile(null)
+        setZoomLevel(100)
+      } else if (e.key === 'ArrowLeft') {
+        navigatePreview('prev')
+      } else if (e.key === 'ArrowRight') {
+        navigatePreview('next')
+      }
+    }
+    
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [previewFile, page])
+
   useEffect(() => {
     if (page && pendingBlockId) {
       const element = document.getElementById(pendingBlockId)
@@ -452,8 +502,8 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
 
       if (response.ok) {
         const newBlock: ContentBlock = await response.json()
-        // Add null attachment since API doesn't return it for new blocks
-        newBlock.attachment = null
+        // Add empty attachments array since API doesn't return it for new blocks
+        newBlock.attachments = []
         setPage({
           ...page,
           blocks: [...page.blocks, newBlock],
@@ -473,11 +523,11 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
   }
 
   const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
-    const file = e.target.files?.[0]
-    if (!file || !page) return
+    const files = e.target.files
+    if (!files || files.length === 0 || !page) return
 
     try {
-      // First create the block
+      // Create ONE block for all files
       const blockResponse = await fetch('/api/blocks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -492,11 +542,13 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
       if (!blockResponse.ok) throw new Error('Failed to create block')
       
       const newBlock: ContentBlock = await blockResponse.json()
-      newBlock.attachment = null
+      newBlock.attachments = []
 
-      // Then upload the file attached to this block
+      // Upload all files to this single block
       const formData = new FormData()
-      formData.append('file', file)
+      for (let i = 0; i < files.length; i++) {
+        formData.append('file', files[i])
+      }
       formData.append('blockId', newBlock.id)
 
       const uploadResponse = await fetch('/api/uploads', {
@@ -505,8 +557,9 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
       })
 
       if (uploadResponse.ok) {
-        const attachment: UploadedFile = await uploadResponse.json()
-        newBlock.attachment = attachment
+        const attachments = await uploadResponse.json()
+        // Handle both single file (object) and multiple files (array) response
+        newBlock.attachments = Array.isArray(attachments) ? attachments : [attachments]
       }
 
       setPage({
@@ -516,7 +569,7 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
       setEditingBlockId(newBlock.id)
       setEditContent('')
     } catch (error) {
-      console.error('Error adding block with attachment:', error)
+      console.error('Error adding block with attachments:', error)
     }
 
     // Reset file input
@@ -538,11 +591,11 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
       })
 
       if (response.ok) {
-        const attachment: UploadedFile = await response.json()
+        const newAttachment: UploadedFile = await response.json()
         setPage(page && {
           ...page,
           blocks: page.blocks.map(b => 
-            b.id === blockId ? { ...b, attachment } : b
+            b.id === blockId ? { ...b, attachments: [...b.attachments, newAttachment] } : b
           ),
         })
       }
@@ -562,7 +615,7 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
         setPage(page && {
           ...page,
           blocks: page.blocks.map(b => 
-            b.id === blockId ? { ...b, attachment: null } : b
+            b.id === blockId ? { ...b, attachments: b.attachments.filter(a => a.id !== fileId) } : b
           ),
         })
       }
@@ -950,7 +1003,7 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
 
                     {/* Rich Text Editor */}
                     <div className="flex gap-4">
-                      <div className={block.attachment ? 'flex-1' : 'w-full'}>
+                      <div className="flex-1">
                         <div
                           ref={editorRef}
                           contentEditable
@@ -960,52 +1013,60 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
                         />
                       </div>
                       
-                      {/* Attachment management in edit mode */}
+                      {/* Attachments management in edit mode */}
                       <div className="w-64 flex-shrink-0">
-                        {block.attachment ? (
-                          <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
-                            {block.attachment.mimeType.startsWith('image/') ? (
-                              <img 
-                                src={`/api/files/${block.attachment.id}`}
-                                alt={block.attachment.filename}
-                                className="w-full h-32 object-cover"
-                              />
-                            ) : (
-                              <div className="w-full h-32 bg-gray-100 dark:bg-gray-800 flex flex-col items-center justify-center">
-                                <span className="text-3xl mb-1">
-                                  {block.attachment.mimeType.includes('pdf') ? '📄' :
-                                   block.attachment.mimeType.includes('word') ? '📝' :
-                                   block.attachment.mimeType.includes('excel') ? '📊' :
-                                   '📎'}
-                                </span>
-                                <span className="text-xs text-gray-600 dark:text-gray-400 px-2 text-center truncate w-full">
-                                  {block.attachment.filename}
-                                </span>
+                        {/* Show existing attachments */}
+                        {block.attachments.length > 0 && (
+                          <div className="space-y-2 mb-2">
+                            {block.attachments.map((attachment) => (
+                              <div key={attachment.id} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+                                {attachment.mimeType.startsWith('image/') ? (
+                                  <img 
+                                    src={`/api/files/${attachment.id}`}
+                                    alt={attachment.filename}
+                                    className="w-full h-24 object-cover"
+                                  />
+                                ) : (
+                                  <div className="w-full h-24 bg-gray-100 dark:bg-gray-800 flex flex-col items-center justify-center">
+                                    <span className="text-2xl mb-1">
+                                      {attachment.mimeType.includes('pdf') ? '📄' :
+                                       attachment.mimeType.includes('word') ? '📝' :
+                                       attachment.mimeType.includes('excel') ? '📊' :
+                                       '📎'}
+                                    </span>
+                                    <span className="text-xs text-gray-600 dark:text-gray-400 px-2 text-center truncate w-full">
+                                      {attachment.filename}
+                                    </span>
+                                  </div>
+                                )}
+                                <button
+                                  onClick={() => handleRemoveAttachment(block.id, attachment.id)}
+                                  className="w-full bg-red-500 text-white text-xs py-1 hover:bg-red-600 transition-colors"
+                                >
+                                  🗑️ Remove
+                                </button>
                               </div>
-                            )}
-                            <button
-                              onClick={() => handleRemoveAttachment(block.id, block.attachment!.id)}
-                              className="w-full bg-red-500 text-white text-xs py-2 hover:bg-red-600 transition-colors"
-                            >
-                              🗑️ Remove Attachment
-                            </button>
+                            ))}
                           </div>
-                        ) : (
-                          <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:border-blue-500 transition-colors">
-                            <span className="text-3xl mb-1">📎</span>
-                            <span className="text-xs text-gray-600 dark:text-gray-400">Add Attachment</span>
-                            <input
-                              type="file"
-                              className="hidden"
-                              accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.md"
-                              onChange={(e) => {
-                                const file = e.target.files?.[0]
-                                if (file) handleUploadToBlock(block.id, file)
-                                e.target.value = ''
-                              }}
-                            />
-                          </label>
                         )}
+                        {/* Add more attachments */}
+                        <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:border-blue-500 transition-colors">
+                          <span className="text-2xl mb-1">📎</span>
+                          <span className="text-xs text-gray-600 dark:text-gray-400">Add More</span>
+                          <input
+                            type="file"
+                            multiple
+                            className="hidden"
+                            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.md"
+                            onChange={(e) => {
+                              const files = e.target.files
+                              if (files) {
+                                Array.from(files).forEach(file => handleUploadToBlock(block.id, file))
+                              }
+                              e.target.value = ''
+                            }}
+                          />
+                        </label>
                       </div>
                     </div>
 
@@ -1025,9 +1086,9 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
                     </div>
                   </div>
                 ) : (
-                  <div className={`flex gap-6 ${block.attachment ? '' : ''}`}>
-                    {/* Text content - full width if no attachment, left side if has attachment */}
-                    <div className={block.attachment ? 'flex-1' : 'w-full'}>
+                  <div className="flex flex-col gap-4">
+                    {/* Text content */}
+                    <div className="w-full">
                       <div
                         ref={(el) => { blockRefs.current[block.id] = el }}
                         onMouseUp={() => handleTextSelection(block.id)}
@@ -1037,56 +1098,56 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
                       />
                     </div>
                     
-                    {/* Attachment preview - right side */}
-                    {block.attachment && (
-                      <div className="w-64 flex-shrink-0">
-                        <div 
-                          className="rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 hover:border-blue-500 transition-colors"
-                        >
-                          {block.attachment.mimeType.startsWith('image/') ? (
-                            <div 
-                              onClick={() => setPreviewFile(block.attachment)}
-                              className="cursor-pointer"
-                            >
-                              <img 
-                                src={`/api/files/${block.attachment.id}`}
-                                alt={block.attachment.filename}
-                                className="w-full h-40 object-cover"
-                              />
-                            </div>
-                          ) : (
-                            <div className="w-full bg-gray-100 dark:bg-gray-800 flex flex-col items-center justify-center p-4">
-                              <span className="text-4xl mb-2">
-                                {block.attachment.mimeType.includes('pdf') ? '📄' :
-                                 block.attachment.mimeType.includes('word') ? '📝' :
-                                 block.attachment.mimeType.includes('excel') || block.attachment.mimeType.includes('spreadsheet') ? '📊' :
-                                 block.attachment.mimeType.includes('powerpoint') || block.attachment.mimeType.includes('presentation') ? '📽️' :
-                                 '📎'}
-                              </span>
-                              <span className="text-xs text-gray-600 dark:text-gray-400 text-center truncate w-full mb-3">
-                                {block.attachment.filename}
-                              </span>
-                              <div className="flex gap-2">
-                                <a
-                                  href={`/api/files/${block.attachment.id}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 transition-colors"
-                                  title="Open file in new tab"
-                                >
-                                  🔗 Open
-                                </a>
-                                <a
-                                  href={`/api/files/${block.attachment.id}?download=true`}
-                                  className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 transition-colors"
-                                  title="Download file"
-                                >
-                                  ⬇️ Download
-                                </a>
+                    {/* Attachments grid */}
+                    {block.attachments.length > 0 && (
+                      <div className="grid grid-cols-2 gap-4">
+                        {block.attachments.map((attachment) => (
+                          <div key={attachment.id} className="rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 hover:border-blue-500 transition-colors">
+                            {attachment.mimeType.startsWith('image/') ? (
+                              <div 
+                                onClick={() => setPreviewFile(attachment)}
+                                className="cursor-pointer"
+                              >
+                                <img 
+                                  src={`/api/files/${attachment.id}`}
+                                  alt={attachment.filename}
+                                  className="w-full h-40 object-cover"
+                                />
                               </div>
-                            </div>
-                          )}
-                        </div>
+                            ) : (
+                              <div className="w-full bg-gray-100 dark:bg-gray-800 flex flex-col items-center justify-center p-4">
+                                <span className="text-4xl mb-2">
+                                  {attachment.mimeType.includes('pdf') ? '📄' :
+                                   attachment.mimeType.includes('word') ? '📝' :
+                                   attachment.mimeType.includes('excel') || attachment.mimeType.includes('spreadsheet') ? '📊' :
+                                   attachment.mimeType.includes('powerpoint') || attachment.mimeType.includes('presentation') ? '📽️' :
+                                   '📎'}
+                                </span>
+                                <span className="text-xs text-gray-600 dark:text-gray-400 text-center truncate w-full mb-3">
+                                  {attachment.filename}
+                                </span>
+                                <div className="flex gap-2">
+                                  <a
+                                    href={`/api/files/${attachment.id}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 transition-colors"
+                                    title="Open file in new tab"
+                                  >
+                                    🔗 Open
+                                  </a>
+                                  <a
+                                    href={`/api/files/${attachment.id}?download=true`}
+                                    className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 transition-colors"
+                                    title="Download file"
+                                  >
+                                    ⬇️ Download
+                                  </a>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
                       </div>
                     )}
                     
@@ -1159,19 +1220,47 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
       <input
         ref={fileInputRef}
         type="file"
+        multiple
         onChange={handleFileSelected}
         className="hidden"
         accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.md"
       />
 
       {/* File Preview Popup */}
-      {previewFile && (
-        <div 
-          className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-8"
-          onClick={() => { setPreviewFile(null); setZoomLevel(100) }}
-        >
-          {/* Close and zoom controls */}
-          <div className="absolute top-4 right-4 flex items-center gap-2">
+      {previewFile && (() => {
+        const allImages = getAllImages()
+        const currentIndex = allImages.findIndex(img => img.id === previewFile.id)
+        const showNav = allImages.length > 1 && currentIndex !== -1
+        
+        return (
+          <div 
+            className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-8"
+            onClick={() => { setPreviewFile(null); setZoomLevel(100) }}
+          >
+            {/* Left arrow */}
+            {showNav && (
+              <button
+                onClick={(e) => { e.stopPropagation(); navigatePreview('prev') }}
+                className="absolute left-4 top-1/2 -translate-y-1/2 w-12 h-12 bg-white/20 hover:bg-white/30 rounded-full text-white text-2xl font-bold transition-colors z-10"
+                title="Previous image (←)"
+              >
+                ‹
+              </button>
+            )}
+            
+            {/* Right arrow */}
+            {showNav && (
+              <button
+                onClick={(e) => { e.stopPropagation(); navigatePreview('next') }}
+                className="absolute right-4 top-1/2 -translate-y-1/2 w-12 h-12 bg-white/20 hover:bg-white/30 rounded-full text-white text-2xl font-bold transition-colors z-10"
+                title="Next image (→)"
+              >
+                ›
+              </button>
+            )}
+
+            {/* Close and zoom controls */}
+            <div className="absolute top-4 right-4 flex items-center gap-2">
             <button
               onClick={(e) => { e.stopPropagation(); setZoomLevel(z => Math.max(25, z - 25)) }}
               className="w-10 h-10 bg-white/20 hover:bg-white/30 rounded-lg text-white text-xl font-bold"
@@ -1198,15 +1287,15 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
           
           {/* Preview content */}
           <div 
-            className="max-h-full overflow-auto"
+            className="flex items-center justify-center max-w-full max-h-full"
             onClick={(e) => e.stopPropagation()}
-            style={{ transform: `scale(${zoomLevel / 100})`, transformOrigin: 'center center' }}
           >
             {previewFile.mimeType.startsWith('image/') ? (
               <img 
                 src={previewFile.path} 
                 alt={previewFile.filename}
-                className="max-w-none"
+                className="max-w-[calc(100vw-200px)] max-h-[calc(100vh-200px)] object-contain"
+                style={{ transform: `scale(${zoomLevel / 100})`, transformOrigin: 'center center' }}
               />
             ) : previewFile.mimeType === 'application/pdf' ? (
               <iframe
@@ -1248,12 +1337,16 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
             )}
           </div>
           
-          {/* Filename at bottom */}
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-white/20 px-4 py-2 rounded-lg">
-            <span className="text-white text-sm">{previewFile.filename}</span>
+            {/* Filename at bottom */}
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-white/20 px-4 py-2 rounded-lg">
+              <span className="text-white text-sm">
+                {previewFile.filename}
+                {showNav && ` (${currentIndex + 1}/${allImages.length})`}
+              </span>
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* Floating Toolbar - Always rendered, visibility controlled via style */}
       <div

@@ -41,8 +41,8 @@ model ContentBlock {
   documentId String
   document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
   
-  // Optional attached file
-  attachment UploadedFile?
+  // Multiple attached files
+  attachments UploadedFile[]
 
   @@index([documentId, order])
   @@map("content_blocks")
@@ -58,7 +58,7 @@ model UploadedFile {
   createdAt   DateTime @default(now())
   
   // Link to content block (not document)
-  blockId     String?  @unique
+  blockId     String?
   block       ContentBlock? @relation(fields: [blockId], references: [id], onDelete: Cascade)
 
   @@index([mimeType])

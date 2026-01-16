@@ -37,6 +37,9 @@ export async function POST(request: NextRequest) {
         content,
         order,
       },
+      include: {
+        attachments: true,
+      },
     })
 
     return NextResponse.json(block, { status: 201 })
