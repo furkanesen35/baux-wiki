@@ -1,3 +1,170 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Inline Image Styles for Word-like text wrapping */
+.inline-image {
+  display: inline-block;
+  position: relative;
+  cursor: move;
+  max-width: 100%;
+  margin: 4px;
+  vertical-align: middle;
+}
+
+.inline-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+/* Image wrapping styles */
+.inline-image[data-wrap="inline"] {
+  display: block;
+  margin: 16px 0;
+  float: none;
+  clear: both;
+}
+
+.inline-image[data-wrap="left"] {
+  float: left;
+  margin: 8px 16px 8px 0;
+  clear: left;
+}
+
+.inline-image[data-wrap="right"] {
+  float: right;
+  margin: 8px 0 8px 16px;
+  clear: right;
+}
+
+.inline-image[data-wrap="center"] {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  margin: 16px 0;
+  float: none;
+  clear: both;
+}
+
+.inline-image[data-wrap="tight-left"] {
+  float: left;
+  margin: 8px 16px 8px 0;
+  shape-outside: content-box;
+  shape-margin: 8px;
+}
+
+.inline-image[data-wrap="tight-right"] {
+  float: right;
+  margin: 8px 0 8px 16px;
+  shape-outside: content-box;
+  shape-margin: 8px;
+}
+
+/* Selected image state */
+.inline-image.selected {
+  outline: 3px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+.inline-image.selected::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border: 2px dashed #3b82f6;
+  pointer-events: none;
+}
+
+/* Resize handles - only visible when selected AND in edit mode */
+.inline-image .resize-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: #3b82f6;
+  border: 2px solid white;
+  border-radius: 2px;
+  display: none;
+  z-index: 10;
+}
+
+/* Only show resize handles when parent has selected class */
+.inline-image.selected .resize-handle {
+  display: block;
+}
+
+/* In view mode (prose without contenteditable), never show handles */
+.prose:not([contenteditable="true"]) .inline-image .resize-handle {
+  display: none !important;
+}
+
+/* Make inline images in view mode clickable */
+.prose:not([contenteditable="true"]) .inline-image {
+  cursor: pointer;
+}
+
+.prose:not([contenteditable="true"]) .inline-image.selected {
+  outline: none;
+}
+
+.prose:not([contenteditable="true"]) .inline-image.selected::after {
+  display: none;
+}
+
+.inline-image .resize-handle.nw { top: -6px; left: -6px; cursor: nw-resize; }
+.inline-image .resize-handle.ne { top: -6px; right: -6px; cursor: ne-resize; }
+.inline-image .resize-handle.sw { bottom: -6px; left: -6px; cursor: sw-resize; }
+.inline-image .resize-handle.se { bottom: -6px; right: -6px; cursor: se-resize; }
+.inline-image .resize-handle.n { top: -6px; left: 50%; transform: translateX(-50%); cursor: n-resize; }
+.inline-image .resize-handle.s { bottom: -6px; left: 50%; transform: translateX(-50%); cursor: s-resize; }
+.inline-image .resize-handle.w { top: 50%; left: -6px; transform: translateY(-50%); cursor: w-resize; }
+.inline-image .resize-handle.e { top: 50%; right: -6px; transform: translateY(-50%); cursor: e-resize; }
+
+/* Clear floats after blocks with floated images */
+.prose::after {
+  content: '';
+  display: table;
+  clear: both;
+}
+
+/* Dragging state */
+.inline-image.dragging {
+  opacity: 0.5;
+}
+
+/* Image toolbar */
+.image-toolbar {
+  position: absolute;
+  top: -44px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1f2937;
+  border-radius: 8px;
+  padding: 4px 8px;
+  display: flex;
+  gap: 4px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  z-index: 50;
+  white-space: nowrap;
+}
+
+.image-toolbar button {
+  padding: 6px 10px;
+  border-radius: 4px;
+  color: white;
+  font-size: 12px;
+  transition: background 0.15s;
+}
+
+.image-toolbar button:hover {
+  background: #374151;
+}
+
+.image-toolbar button.active {
+  background: #3b82f6;
+}
+
+.image-toolbar .separator {
+  width: 1px;
+  background: #4b5563;
+  margin: 0 4px;
+}

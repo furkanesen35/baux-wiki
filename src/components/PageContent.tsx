@@ -76,6 +76,13 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
   const [showColorPicker, setShowColorPicker] = useState(false)
   const [showFontSizeDropdown, setShowFontSizeDropdown] = useState(false)
   
+  // Inline image state
+  const [selectedImage, setSelectedImage] = useState<HTMLElement | null>(null)
+  const [imageWrap, setImageWrap] = useState<string>('left')
+  const inlineImageInputRef = useRef<HTMLInputElement>(null)
+  const isResizingRef = useRef(false)
+  const isDraggingImageRef = useRef(false)
+  
   const SELECTION_MARKER_ID = 'baux-selection-marker'
 
   useEffect(() => {
@@ -652,6 +659,7 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
     if (block && !block.content) {
       await handleDeleteBlock(blockId, false)
     } else {
+      deselectImage()
       setEditingBlockId(null)
     }
   }
@@ -705,8 +713,411 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
     }
   }
 
+  // ===== Inline Image Functions =====
+  
+  // Insert image into editor at cursor position
+  const insertImageIntoEditor = async (file: File): Promise<void> => {
+    if (!editorRef.current) return
+    
+    try {
+      // Upload the file first
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('blockId', editingBlockId || '')
+      
+      const response = await fetch('/api/uploads', {
+        method: 'POST',
+        body: formData,
+      })
+      
+      if (!response.ok) throw new Error('Upload failed')
+      
+      const uploadedFile: UploadedFile = await response.json()
+      
+      // Create the inline image wrapper
+      const wrapper = document.createElement('span')
+      wrapper.className = 'inline-image'
+      wrapper.setAttribute('data-wrap', 'left')
+      wrapper.setAttribute('data-file-id', uploadedFile.id)
+      wrapper.setAttribute('contenteditable', 'false')
+      wrapper.setAttribute('draggable', 'true')
+      
+      const img = document.createElement('img')
+      img.src = `/api/files/${uploadedFile.id}`
+      img.alt = uploadedFile.filename
+      img.style.maxWidth = '300px'
+      img.style.height = 'auto'
+      
+      // Add resize handles
+      const handles = ['nw', 'n', 'ne', 'w', 'e', 'sw', 's', 'se']
+      handles.forEach(pos => {
+        const handle = document.createElement('span')
+        handle.className = `resize-handle ${pos}`
+        handle.setAttribute('data-handle', pos)
+        wrapper.appendChild(handle)
+      })
+      
+      wrapper.appendChild(img)
+      
+      // Insert at cursor position
+      editorRef.current.focus()
+      const selection = window.getSelection()
+      if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0)
+        range.deleteContents()
+        range.insertNode(wrapper)
+        range.setStartAfter(wrapper)
+        range.collapse(true)
+        selection.removeAllRanges()
+        selection.addRange(range)
+      } else {
+        editorRef.current.appendChild(wrapper)
+      }
+      
+      // Trigger content update
+      handleEditorInput()
+      
+      // Select the newly inserted image
+      selectImage(wrapper)
+    } catch (error) {
+      console.error('Error inserting image:', error)
+      alert('Failed to insert image')
+    }
+  }
+  
+  // Select an inline image
+  const selectImage = (imageWrapper: HTMLElement): void => {
+    // Deselect previous
+    if (selectedImage) {
+      selectedImage.classList.remove('selected')
+    }
+    
+    imageWrapper.classList.add('selected')
+    setSelectedImage(imageWrapper)
+    setImageWrap(imageWrapper.getAttribute('data-wrap') || 'inline')
+  }
+  
+  // Deselect inline image
+  const deselectImage = (): void => {
+    if (selectedImage) {
+      selectedImage.classList.remove('selected')
+    }
+    setSelectedImage(null)
+  }
+  
+  // Change image wrap style
+  const changeImageWrap = (wrap: string): void => {
+    if (!selectedImage) return
+    
+    selectedImage.setAttribute('data-wrap', wrap)
+    setImageWrap(wrap)
+    handleEditorInput()
+  }
+  
+  // Delete selected image
+  const deleteSelectedImage = (): void => {
+    if (!selectedImage) return
+    
+    const fileId = selectedImage.getAttribute('data-file-id')
+    selectedImage.remove()
+    setSelectedImage(null)
+    handleEditorInput()
+    
+    // Optionally delete from server
+    if (fileId) {
+      fetch(`/api/uploads/${fileId}`, { method: 'DELETE' }).catch(console.error)
+    }
+  }
+  
+  // Handle editor click for image selection
+  const handleEditorClick = (e: React.MouseEvent): void => {
+    const target = e.target as HTMLElement
+    
+    // Check if clicked on inline image or its child
+    const imageWrapper = target.closest('.inline-image') as HTMLElement
+    if (imageWrapper && editorRef.current?.contains(imageWrapper)) {
+      e.preventDefault()
+      e.stopPropagation()
+      selectImage(imageWrapper)
+      return
+    }
+    
+    // Clicked elsewhere, deselect
+    deselectImage()
+  }
+  
+  // Handle resize
+  const handleResizeStart = (e: React.MouseEvent, handle: string): void => {
+    if (!selectedImage) return
+    e.preventDefault()
+    e.stopPropagation()
+    
+    isResizingRef.current = true
+    const img = selectedImage.querySelector('img') as HTMLImageElement
+    if (!img) return
+    
+    const startX = e.clientX
+    const startY = e.clientY
+    const startWidth = img.offsetWidth
+    const startHeight = img.offsetHeight
+    const aspectRatio = startWidth / startHeight
+    
+    const onMouseMove = (moveEvent: MouseEvent): void => {
+      if (!isResizingRef.current) return
+      
+      const deltaX = moveEvent.clientX - startX
+      const deltaY = moveEvent.clientY - startY
+      
+      let newWidth = startWidth
+      let newHeight = startHeight
+      
+      if (handle.includes('e')) newWidth = startWidth + deltaX
+      if (handle.includes('w')) newWidth = startWidth - deltaX
+      if (handle.includes('s')) newHeight = startHeight + deltaY
+      if (handle.includes('n')) newHeight = startHeight - deltaY
+      
+      // Maintain aspect ratio for corner handles
+      if (handle.length === 2) {
+        if (Math.abs(deltaX) > Math.abs(deltaY)) {
+          newHeight = newWidth / aspectRatio
+        } else {
+          newWidth = newHeight * aspectRatio
+        }
+      }
+      
+      // Min size
+      newWidth = Math.max(50, newWidth)
+      newHeight = Math.max(50, newHeight)
+      
+      img.style.width = `${newWidth}px`
+      img.style.height = `${newHeight}px`
+      img.style.maxWidth = 'none'
+    }
+    
+    const onMouseUp = (): void => {
+      isResizingRef.current = false
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+      handleEditorInput()
+    }
+    
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }
+  
+  // Handle drag start for image
+  const handleImageDragStart = (e: React.DragEvent, imageWrapper: HTMLElement): void => {
+    isDraggingImageRef.current = true
+    imageWrapper.classList.add('dragging')
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/html', imageWrapper.outerHTML)
+    e.dataTransfer.setData('application/x-inline-image', 'true')
+  }
+  
+  // Handle drag end
+  const handleImageDragEnd = (e: React.DragEvent): void => {
+    isDraggingImageRef.current = false
+    const target = e.target as HTMLElement
+    const imageWrapper = target.closest('.inline-image')
+    if (imageWrapper) {
+      imageWrapper.classList.remove('dragging')
+    }
+  }
+  
+  // Handle drop in editor
+  const handleEditorDrop = (e: React.DragEvent): void => {
+    if (!editorRef.current) return
+    
+    const isInlineImage = e.dataTransfer.getData('application/x-inline-image')
+    
+    if (isInlineImage) {
+      e.preventDefault()
+      
+      // Get the drop position
+      const range = document.caretRangeFromPoint(e.clientX, e.clientY)
+      if (!range) return
+      
+      // Remove the original dragged element
+      const dragging = editorRef.current.querySelector('.inline-image.dragging')
+      const html = e.dataTransfer.getData('text/html')
+      
+      if (dragging) {
+        dragging.remove()
+      }
+      
+      // Insert at new position
+      const temp = document.createElement('div')
+      temp.innerHTML = html
+      const newImage = temp.firstChild as HTMLElement
+      if (newImage) {
+        newImage.classList.remove('dragging')
+        range.insertNode(newImage)
+        selectImage(newImage)
+      }
+      
+      handleEditorInput()
+    } else {
+      // Handle dropped files
+      const files = e.dataTransfer.files
+      if (files.length > 0) {
+        e.preventDefault()
+        Array.from(files).forEach(file => {
+          if (file.type.startsWith('image/')) {
+            insertImageIntoEditor(file)
+          }
+        })
+      }
+    }
+  }
+  
+  // Keyboard handler for delete
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (selectedImage && editingBlockId) {
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          e.preventDefault()
+          deleteSelectedImage()
+        } else if (e.key === 'Escape') {
+          deselectImage()
+        }
+      }
+    }
+    
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [selectedImage, editingBlockId])
+  
+  // Setup event delegation for inline images in editor
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor || !editingBlockId) return
+    
+    // Handle mousedown on resize handles
+    const handleMouseDown = (e: MouseEvent): void => {
+      const target = e.target as HTMLElement
+      
+      // Check for resize handle
+      if (target.classList.contains('resize-handle')) {
+        e.preventDefault()
+        e.stopPropagation()
+        const handle = target.getAttribute('data-handle') || ''
+        const imageWrapper = target.closest('.inline-image') as HTMLElement
+        if (imageWrapper) {
+          selectImage(imageWrapper)
+          
+          isResizingRef.current = true
+          const img = imageWrapper.querySelector('img') as HTMLImageElement
+          if (!img) return
+          
+          const startX = e.clientX
+          const startY = e.clientY
+          const startWidth = img.offsetWidth
+          const startHeight = img.offsetHeight
+          const aspectRatio = startWidth / startHeight
+          
+          const onMouseMove = (moveEvent: MouseEvent): void => {
+            if (!isResizingRef.current) return
+            
+            let deltaX = moveEvent.clientX - startX
+            let deltaY = moveEvent.clientY - startY
+            
+            let newWidth = startWidth
+            let newHeight = startHeight
+            
+            if (handle.includes('e')) newWidth = startWidth + deltaX
+            if (handle.includes('w')) newWidth = startWidth - deltaX
+            if (handle.includes('s')) newHeight = startHeight + deltaY
+            if (handle.includes('n')) newHeight = startHeight - deltaY
+            
+            // Maintain aspect ratio for corner handles
+            if (handle.length === 2) {
+              if (Math.abs(deltaX) > Math.abs(deltaY)) {
+                newHeight = newWidth / aspectRatio
+              } else {
+                newWidth = newHeight * aspectRatio
+              }
+            }
+            
+            newWidth = Math.max(50, newWidth)
+            newHeight = Math.max(50, newHeight)
+            
+            img.style.width = `${newWidth}px`
+            img.style.height = `${newHeight}px`
+            img.style.maxWidth = 'none'
+          }
+          
+          const onMouseUp = (): void => {
+            isResizingRef.current = false
+            document.removeEventListener('mousemove', onMouseMove)
+            document.removeEventListener('mouseup', onMouseUp)
+            handleEditorInput()
+          }
+          
+          document.addEventListener('mousemove', onMouseMove)
+          document.addEventListener('mouseup', onMouseUp)
+        }
+      }
+    }
+    
+    // Handle drag start on inline images
+    const handleDragStart = (e: DragEvent): void => {
+      const target = e.target as HTMLElement
+      const imageWrapper = target.closest('.inline-image') as HTMLElement
+      if (imageWrapper && editor.contains(imageWrapper)) {
+        isDraggingImageRef.current = true
+        imageWrapper.classList.add('dragging')
+        e.dataTransfer?.setData('text/html', imageWrapper.outerHTML)
+        e.dataTransfer?.setData('application/x-inline-image', 'true')
+      }
+    }
+    
+    // Handle drag end
+    const handleDragEnd = (e: DragEvent): void => {
+      isDraggingImageRef.current = false
+      const target = e.target as HTMLElement
+      const imageWrapper = target.closest('.inline-image')
+      if (imageWrapper) {
+        imageWrapper.classList.remove('dragging')
+      }
+    }
+    
+    editor.addEventListener('mousedown', handleMouseDown)
+    editor.addEventListener('dragstart', handleDragStart)
+    editor.addEventListener('dragend', handleDragEnd)
+    
+    return () => {
+      editor.removeEventListener('mousedown', handleMouseDown)
+      editor.removeEventListener('dragstart', handleDragStart)
+      editor.removeEventListener('dragend', handleDragEnd)
+    }
+  }, [editingBlockId, selectedImage])
+  
+  // ===== End Inline Image Functions =====
+
+  // Clean content before saving - remove resize handles and selection states
+  const cleanContentForSave = (html: string): string => {
+    const temp = document.createElement('div')
+    temp.innerHTML = html
+    
+    // Remove all resize handles
+    temp.querySelectorAll('.resize-handle').forEach(el => el.remove())
+    
+    // Remove selected class from images
+    temp.querySelectorAll('.inline-image.selected').forEach(el => {
+      el.classList.remove('selected')
+    })
+    
+    // Remove dragging class
+    temp.querySelectorAll('.inline-image.dragging').forEach(el => {
+      el.classList.remove('dragging')
+    })
+    
+    return temp.innerHTML
+  }
+
   const handleSaveBlockWithEditor = async (blockId: string): Promise<void> => {
-    const content = editorRef.current?.innerHTML || ''
+    const rawContent = editorRef.current?.innerHTML || ''
+    const content = cleanContentForSave(rawContent)
 
     try {
       const response = await fetch(`/api/blocks/${blockId}`, {
@@ -721,6 +1132,7 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
           ...page,
           blocks: page.blocks.map(b => b.id === blockId ? updated : b),
         })
+        deselectImage()
         setEditingBlockId(null)
       }
     } catch (error) {
@@ -999,18 +1411,119 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
                       >
                         🔗 Link
                       </button>
+                      <div className="w-px bg-gray-300 dark:bg-gray-600 mx-1"></div>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          inlineImageInputRef.current?.click()
+                        }}
+                        className="px-3 py-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded text-green-600 dark:text-green-400"
+                        title="Insert Image"
+                      >
+                        🖼️ Image
+                      </button>
+                      {/* Hidden file input for inline images */}
+                      <input
+                        ref={inlineImageInputRef}
+                        type="file"
+                        multiple
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const files = e.target.files
+                          if (files) {
+                            Array.from(files).forEach(file => insertImageIntoEditor(file))
+                          }
+                          e.target.value = ''
+                        }}
+                      />
                     </div>
 
                     {/* Rich Text Editor */}
                     <div className="flex gap-4">
-                      <div className="flex-1">
+                      <div className="flex-1 relative">
                         <div
                           ref={editorRef}
                           contentEditable
                           onInput={handleEditorInput}
+                          onClick={handleEditorClick}
+                          onDrop={handleEditorDrop}
+                          onDragOver={(e) => e.preventDefault()}
                           className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:border-blue-600 dark:focus:border-blue-500 bg-white dark:bg-gray-800 min-h-[80px] max-h-[500px] overflow-y-auto prose dark:prose-invert max-w-none prose-headings:text-gray-900 dark:prose-headings:text-gray-100 prose-p:text-gray-900 dark:prose-p:text-gray-100"
                           style={{ wordBreak: 'break-word', overflowWrap: 'break-word', wordWrap: 'break-word' }}
                         />
+                        
+                        {/* Inline Image Toolbar */}
+                        {selectedImage && editingBlockId && (
+                          <div 
+                            className="image-toolbar"
+                            style={{
+                              position: 'absolute',
+                              top: selectedImage.offsetTop - 48,
+                              left: Math.min(Math.max(selectedImage.offsetLeft + selectedImage.offsetWidth / 2 - 180, 0), (editorRef.current?.offsetWidth || 400) - 360),
+                            }}
+                          >
+                            <button
+                              type="button"
+                              className={imageWrap === 'left' ? 'active' : ''}
+                              onClick={() => changeImageWrap('left')}
+                              title="Float left - text wraps on right"
+                            >
+                              ⬅️ Left
+                            </button>
+                            <button
+                              type="button"
+                              className={imageWrap === 'right' ? 'active' : ''}
+                              onClick={() => changeImageWrap('right')}
+                              title="Float right - text wraps on left"
+                            >
+                              ➡️ Right
+                            </button>
+                            <button
+                              type="button"
+                              className={imageWrap === 'center' ? 'active' : ''}
+                              onClick={() => changeImageWrap('center')}
+                              title="Center - image on its own line, centered"
+                            >
+                              ⬜ Center
+                            </button>
+                            <button
+                              type="button"
+                              className={imageWrap === 'inline' ? 'active' : ''}
+                              onClick={() => changeImageWrap('inline')}
+                              title="Inline - image on its own line, left aligned"
+                            >
+                              📄 Block
+                            </button>
+                            <div className="separator" />
+                            <button
+                              type="button"
+                              className={imageWrap === 'tight-left' ? 'active' : ''}
+                              onClick={() => changeImageWrap('tight-left')}
+                              title="Tight left - text follows image contour"
+                            >
+                              🔄 Tight L
+                            </button>
+                            <button
+                              type="button"
+                              className={imageWrap === 'tight-right' ? 'active' : ''}
+                              onClick={() => changeImageWrap('tight-right')}
+                              title="Tight right - text follows image contour"
+                            >
+                              🔄 Tight R
+                            </button>
+                            <div className="separator" />
+                            <button
+                              type="button"
+                              onClick={deleteSelectedImage}
+                              title="Delete image"
+                              className="!text-red-400 hover:!bg-red-900"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        )}
                       </div>
                       
                       {/* Attachments management in edit mode */}
@@ -1092,6 +1605,30 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
                       <div
                         ref={(el) => { blockRefs.current[block.id] = el }}
                         onMouseUp={() => handleTextSelection(block.id)}
+                        onClick={(e) => {
+                          // Handle click on inline images in view mode
+                          const target = e.target as HTMLElement
+                          const inlineImage = target.closest('.inline-image')
+                          if (inlineImage) {
+                            const fileId = inlineImage.getAttribute('data-file-id')
+                            if (fileId) {
+                              // Find the file in attachments or create a preview object
+                              const img = inlineImage.querySelector('img') as HTMLImageElement
+                              if (img) {
+                                setPreviewFile({
+                                  id: fileId,
+                                  filename: img.alt || 'Image',
+                                  storedName: '',
+                                  mimeType: 'image/jpeg',
+                                  size: 0,
+                                  path: img.src,
+                                  createdAt: '',
+                                  blockId: block.id,
+                                })
+                              }
+                            }
+                          }
+                        }}
                         className="prose dark:prose-invert max-w-none prose-headings:text-gray-900 dark:prose-headings:text-gray-100 prose-p:text-gray-900 dark:prose-p:text-gray-100 cursor-text prose-a:text-blue-600 dark:prose-a:text-blue-400 prose-a:no-underline hover:prose-a:underline"
                         style={{ wordBreak: 'break-word', overflowWrap: 'break-word', wordWrap: 'break-word' }}
                         dangerouslySetInnerHTML={{ __html: highlightSearchTerm(linkifyContent(block.content), highlightTerm) || '<p class="text-gray-400 dark:text-gray-500 italic">Empty block - click edit to add content</p>' }}
