@@ -60,11 +60,9 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null)
   const [editContent, setEditContent] = useState('')
   const [loading, setLoading] = useState(true)
-  const [showAddMenu, setShowAddMenu] = useState(false)
   const [previewFile, setPreviewFile] = useState<UploadedFile | null>(null)
   const [zoomLevel, setZoomLevel] = useState(100)
   const editorRef = useRef<HTMLDivElement>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const pendingBlockIdRef = useRef<string | null>(null)
   
   // Floating toolbar state - use refs to avoid re-renders!
@@ -492,7 +490,6 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
 
   // Add block without attachment
   const handleAddTextBlock = async (): Promise<void> => {
-    setShowAddMenu(false)
     if (!page) return
 
     try {
@@ -523,113 +520,7 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
     }
   }
 
-  // Add block with attachment - first create block, then upload file
-  const handleAddBlockWithAttachment = (): void => {
-    setShowAddMenu(false)
-    fileInputRef.current?.click()
-  }
 
-  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
-    const files = e.target.files
-    if (!files || files.length === 0 || !page) return
-
-    try {
-      // Create ONE block for all files
-      const blockResponse = await fetch('/api/blocks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          documentId: pageId,
-          type: 'text',
-          content: '',
-          order: page.blocks.length,
-        }),
-      })
-
-      if (!blockResponse.ok) throw new Error('Failed to create block')
-      
-      const newBlock: ContentBlock = await blockResponse.json()
-      newBlock.attachments = []
-
-      // Upload all files to this single block
-      const formData = new FormData()
-      for (let i = 0; i < files.length; i++) {
-        formData.append('file', files[i])
-      }
-      formData.append('blockId', newBlock.id)
-
-      const uploadResponse = await fetch('/api/uploads', {
-        method: 'POST',
-        body: formData,
-      })
-
-      if (uploadResponse.ok) {
-        const attachments = await uploadResponse.json()
-        // Handle both single file (object) and multiple files (array) response
-        newBlock.attachments = Array.isArray(attachments) ? attachments : [attachments]
-      }
-
-      setPage({
-        ...page,
-        blocks: [...page.blocks, newBlock],
-      })
-      setEditingBlockId(newBlock.id)
-      setEditContent('')
-    } catch (error) {
-      console.error('Error adding block with attachments:', error)
-    }
-
-    // Reset file input
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
-    }
-  }
-
-  // Upload attachment to existing block
-  const handleUploadToBlock = async (blockId: string, file: File): Promise<void> => {
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('blockId', blockId)
-
-    try {
-      const response = await fetch('/api/uploads', {
-        method: 'POST',
-        body: formData,
-      })
-
-      if (response.ok) {
-        const newAttachment: UploadedFile = await response.json()
-        setPage(page && {
-          ...page,
-          blocks: page.blocks.map(b => 
-            b.id === blockId ? { ...b, attachments: [...b.attachments, newAttachment] } : b
-          ),
-        })
-      }
-    } catch (error) {
-      console.error('Error uploading file:', error)
-    }
-  }
-
-  // Remove attachment from block
-  const handleRemoveAttachment = async (blockId: string, fileId: string): Promise<void> => {
-    try {
-      const response = await fetch(`/api/uploads/${fileId}`, {
-        method: 'DELETE',
-      })
-
-      if (response.ok) {
-        setPage(page && {
-          ...page,
-          blocks: page.blocks.map(b => 
-            b.id === blockId ? { ...b, attachments: b.attachments.filter(a => a.id !== fileId) } : b
-          ),
-        })
-      }
-    } catch (error) {
-      console.error('Error removing attachment:', error)
-    }
-  }
 
   const handleSaveBlock = async (blockId: string): Promise<void> => {
     try {
@@ -1179,32 +1070,12 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
         {page.blocks.length === 0 ? (
           <div className="flex items-center justify-center h-[300px] relative">
             <button
-              onClick={() => setShowAddMenu(!showAddMenu)}
+              onClick={handleAddTextBlock}
               className="w-16 h-16 bg-blue-600 dark:bg-blue-500 text-white rounded-full text-3xl font-medium hover:bg-blue-700 dark:hover:bg-blue-600 transition-all hover:scale-110 shadow-lg"
               title="Add content block"
             >
               +
             </button>
-            
-            {/* Add menu dropdown for empty state */}
-            {showAddMenu && (
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 translate-y-8 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 py-2 min-w-[200px] z-10">
-                <button
-                  onClick={handleAddTextBlock}
-                  className="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-gray-100 flex items-center gap-3"
-                >
-                  <span className="text-xl">📝</span>
-                  <span>Text Only</span>
-                </button>
-                <button
-                  onClick={handleAddBlockWithAttachment}
-                  className="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-gray-100 flex items-center gap-3"
-                >
-                  <span className="text-xl">📎</span>
-                  <span>Text + Attachment</span>
-                </button>
-              </div>
-            )}
           </div>
         ) : (
           <div className="space-y-4">
@@ -1525,62 +1396,6 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
                           </div>
                         )}
                       </div>
-                      
-                      {/* Attachments management in edit mode */}
-                      <div className="w-64 flex-shrink-0">
-                        {/* Show existing attachments */}
-                        {block.attachments.length > 0 && (
-                          <div className="space-y-2 mb-2">
-                            {block.attachments.map((attachment) => (
-                              <div key={attachment.id} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
-                                {attachment.mimeType.startsWith('image/') ? (
-                                  <img 
-                                    src={`/api/files/${attachment.id}`}
-                                    alt={attachment.filename}
-                                    className="w-full h-24 object-cover"
-                                  />
-                                ) : (
-                                  <div className="w-full h-24 bg-gray-100 dark:bg-gray-800 flex flex-col items-center justify-center">
-                                    <span className="text-2xl mb-1">
-                                      {attachment.mimeType.includes('pdf') ? '📄' :
-                                       attachment.mimeType.includes('word') ? '📝' :
-                                       attachment.mimeType.includes('excel') ? '📊' :
-                                       '📎'}
-                                    </span>
-                                    <span className="text-xs text-gray-600 dark:text-gray-400 px-2 text-center truncate w-full">
-                                      {attachment.filename}
-                                    </span>
-                                  </div>
-                                )}
-                                <button
-                                  onClick={() => handleRemoveAttachment(block.id, attachment.id)}
-                                  className="w-full bg-red-500 text-white text-xs py-1 hover:bg-red-600 transition-colors"
-                                >
-                                  🗑️ Remove
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        {/* Add more attachments */}
-                        <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:border-blue-500 transition-colors">
-                          <span className="text-2xl mb-1">📎</span>
-                          <span className="text-xs text-gray-600 dark:text-gray-400">Add More</span>
-                          <input
-                            type="file"
-                            multiple
-                            className="hidden"
-                            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.md"
-                            onChange={(e) => {
-                              const files = e.target.files
-                              if (files) {
-                                Array.from(files).forEach(file => handleUploadToBlock(block.id, file))
-                              }
-                              e.target.value = ''
-                            }}
-                          />
-                        </label>
-                      </div>
                     </div>
 
                     <div className="flex gap-2">
@@ -1635,59 +1450,6 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
                       />
                     </div>
                     
-                    {/* Attachments grid */}
-                    {block.attachments.length > 0 && (
-                      <div className="grid grid-cols-2 gap-4">
-                        {block.attachments.map((attachment) => (
-                          <div key={attachment.id} className="rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 hover:border-blue-500 transition-colors">
-                            {attachment.mimeType.startsWith('image/') ? (
-                              <div 
-                                onClick={() => setPreviewFile(attachment)}
-                                className="cursor-pointer"
-                              >
-                                <img 
-                                  src={`/api/files/${attachment.id}`}
-                                  alt={attachment.filename}
-                                  className="w-full h-40 object-cover"
-                                />
-                              </div>
-                            ) : (
-                              <div className="w-full bg-gray-100 dark:bg-gray-800 flex flex-col items-center justify-center p-4">
-                                <span className="text-4xl mb-2">
-                                  {attachment.mimeType.includes('pdf') ? '📄' :
-                                   attachment.mimeType.includes('word') ? '📝' :
-                                   attachment.mimeType.includes('excel') || attachment.mimeType.includes('spreadsheet') ? '📊' :
-                                   attachment.mimeType.includes('powerpoint') || attachment.mimeType.includes('presentation') ? '📽️' :
-                                   '📎'}
-                                </span>
-                                <span className="text-xs text-gray-600 dark:text-gray-400 text-center truncate w-full mb-3">
-                                  {attachment.filename}
-                                </span>
-                                <div className="flex gap-2">
-                                  <a
-                                    href={`/api/files/${attachment.id}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 transition-colors"
-                                    title="Open file in new tab"
-                                  >
-                                    🔗 Open
-                                  </a>
-                                  <a
-                                    href={`/api/files/${attachment.id}?download=true`}
-                                    className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 transition-colors"
-                                    title="Download file"
-                                  >
-                                    ⬇️ Download
-                                  </a>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    
                     {/* Action buttons */}
                     <div className="absolute -top-10 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
                       <button
@@ -1719,49 +1481,19 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
               </div>
             ))}
 
-            {/* Add block button with menu */}
+            {/* Add block button */}
             <div className="flex justify-center pt-8 relative">
               <button
-                onClick={() => setShowAddMenu(!showAddMenu)}
+                onClick={handleAddTextBlock}
                 className="w-12 h-12 bg-blue-600 dark:bg-blue-500 text-white rounded-full text-2xl font-medium hover:bg-blue-700 dark:hover:bg-blue-600 transition-all hover:scale-110 shadow-lg"
                 title="Add content block"
               >
                 +
               </button>
-              
-              {/* Add menu dropdown */}
-              {showAddMenu && (
-                <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 py-2 min-w-[200px] z-10">
-                  <button
-                    onClick={handleAddTextBlock}
-                    className="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-gray-100 flex items-center gap-3"
-                  >
-                    <span className="text-xl">📝</span>
-                    <span>Text Only</span>
-                  </button>
-                  <button
-                    onClick={handleAddBlockWithAttachment}
-                    className="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-gray-100 flex items-center gap-3"
-                  >
-                    <span className="text-xl">📎</span>
-                    <span>Text + Attachment</span>
-                  </button>
-                </div>
-              )}
             </div>
           </div>
         )}
       </div>
-
-      {/* Hidden file input for adding blocks with attachments */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        onChange={handleFileSelected}
-        className="hidden"
-        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.md"
-      />
 
       {/* File Preview Popup */}
       {previewFile && (() => {
