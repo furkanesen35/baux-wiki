@@ -7,6 +7,8 @@ interface PageContentProps {
   pendingBlockId?: string | null
   onBlockScrolled?: () => void
   onNavigateToBlock?: (pageId: string, blockId: string) => void
+  highlightTerm?: string | null
+  onClearHighlight?: () => void
 }
 
 interface UploadedFile {
@@ -53,7 +55,7 @@ const linkifyContent = (html: string): string => {
   })
 }
 
-export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, onNavigateToBlock }: PageContentProps) {
+export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, onNavigateToBlock, highlightTerm, onClearHighlight }: PageContentProps) {
   const [page, setPage] = useState<Document | null>(null)
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null)
   const [editContent, setEditContent] = useState('')
@@ -69,7 +71,12 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
   const floatingToolbarRef = useRef<HTMLDivElement>(null)
   const selectedBlockIdRef = useRef<string | null>(null)
   const savedRangeRef = useRef<Range | null>(null)
+  const savedSelectionTextRef = useRef<string>('')
   const blockRefs = useRef<{ [key: string]: HTMLDivElement | null }>({})
+  const [showColorPicker, setShowColorPicker] = useState(false)
+  const [showFontSizeDropdown, setShowFontSizeDropdown] = useState(false)
+  
+  const SELECTION_MARKER_ID = 'baux-selection-marker'
 
   useEffect(() => {
     fetchPage()
@@ -92,6 +99,29 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
       }
     }
   }, [page, pendingBlockId, onBlockScrolled])
+
+  // Apply highlight to search term and scroll to first match
+  useEffect(() => {
+    if (page && highlightTerm) {
+      setTimeout(() => {
+        // Find the first highlighted mark element and scroll to it
+        const firstMark = document.querySelector('.search-highlight')
+        if (firstMark) {
+          firstMark.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }
+      }, 200)
+    }
+  }, [page, highlightTerm])
+
+  // Helper function to highlight search term in HTML content
+  const highlightSearchTerm = (html: string, term: string | null | undefined): string => {
+    if (!term) return html
+    // Escape special regex characters in the search term
+    const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    // Match the term but not inside HTML tags
+    const regex = new RegExp(`(?![^<]*>)(${escapedTerm})`, 'gi')
+    return html.replace(regex, '<mark class="search-highlight bg-yellow-300 dark:bg-yellow-600 px-0.5 rounded">$1</mark>')
+  }
 
   // Handle clicks on internal wiki links
   useEffect(() => {
@@ -161,8 +191,28 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
     if (floatingToolbarRef.current) {
       floatingToolbarRef.current.style.display = 'none'
     }
+    
+    // Remove any marker spans from all blocks
+    const selectedBlockId = selectedBlockIdRef.current
+    if (selectedBlockId) {
+      const blockRef = blockRefs.current[selectedBlockId]
+      if (blockRef) {
+        const marker = blockRef.querySelector(`#${SELECTION_MARKER_ID}`)
+        if (marker) {
+          const parent = marker.parentNode
+          while (marker.firstChild) {
+            parent?.insertBefore(marker.firstChild, marker)
+          }
+          marker.remove()
+        }
+      }
+    }
+    
     savedRangeRef.current = null
+    savedSelectionTextRef.current = ''
     selectedBlockIdRef.current = null
+    setShowColorPicker(false)
+    setShowFontSizeDropdown(false)
   }
 
   // Handle text selection on mouse up
@@ -176,9 +226,42 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
         return
       }
       
-      // Save the range in a ref (not state) to avoid re-renders
+      // Save the selected text
+      savedSelectionTextRef.current = selection.toString()
+      
+      // Get the range and wrap selected text in a marker span
       const range = selection.getRangeAt(0)
-      savedRangeRef.current = range.cloneRange()
+      const blockRef = blockRefs.current[blockId]
+      
+      if (blockRef) {
+        // Remove any existing marker first
+        const existingMarker = blockRef.querySelector(`#${SELECTION_MARKER_ID}`)
+        if (existingMarker) {
+          const parent = existingMarker.parentNode
+          while (existingMarker.firstChild) {
+            parent?.insertBefore(existingMarker.firstChild, existingMarker)
+          }
+          existingMarker.remove()
+        }
+        
+        // Wrap the selection in a marker span
+        try {
+          blockRef.contentEditable = 'true'
+          const markerSpan = document.createElement('span')
+          markerSpan.id = SELECTION_MARKER_ID
+          range.surroundContents(markerSpan)
+          blockRef.contentEditable = 'false'
+          
+          // Save the range
+          savedRangeRef.current = range.cloneRange()
+        } catch (e) {
+          // surroundContents can fail if selection spans multiple elements
+          // Fall back to saving just the range
+          savedRangeRef.current = range.cloneRange()
+        }
+      } else {
+        savedRangeRef.current = range.cloneRange()
+      }
       
       // Calculate position
       const rect = range.getBoundingClientRect()
@@ -190,11 +273,49 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
     }, 10)
   }
 
+  // Helper to get current font size of selection
+  const getCurrentFontSize = (): number => {
+    // Use saved range if selection is lost
+    const selection = window.getSelection()
+    let range: Range | null = null
+    
+    if (selection && selection.rangeCount > 0) {
+      range = selection.getRangeAt(0)
+    } else if (savedRangeRef.current) {
+      range = savedRangeRef.current
+    }
+    
+    if (!range) return 3 // Default size
+    
+    const container = range.commonAncestorContainer
+    const element = container.nodeType === 3 ? container.parentElement : container as HTMLElement
+    
+    if (element) {
+      // Check for font tag with size attribute
+      const fontTag = element.closest('font[size]')
+      if (fontTag) {
+        return parseInt(fontTag.getAttribute('size') || '3')
+      }
+      // Check inline style font-size
+      const computedSize = window.getComputedStyle(element).fontSize
+      const sizeInPx = parseInt(computedSize)
+      // Map px to font size scale (1-7)
+      if (sizeInPx <= 10) return 1
+      if (sizeInPx <= 13) return 2
+      if (sizeInPx <= 16) return 3
+      if (sizeInPx <= 18) return 4
+      if (sizeInPx <= 24) return 5
+      if (sizeInPx <= 32) return 6
+      return 7
+    }
+    return 3
+  }
+
   // Apply formatting to selected text
-  const applyFloatingFormat = async (command: string): Promise<void> => {
+  const applyFloatingFormat = async (command: string, value?: string): Promise<void> => {
     const selectedBlockId = selectedBlockIdRef.current
     
-    if (!selectedBlockId || !savedRangeRef.current) return
+    if (!selectedBlockId) return
 
     const blockRef = blockRefs.current[selectedBlockId]
     if (!blockRef) return
@@ -206,27 +327,79 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
     blockRef.contentEditable = 'true'
     blockRef.focus()
     
-    // Restore selection
+    // Find the marker span and select its contents
+    const markerSpan = blockRef.querySelector(`#${SELECTION_MARKER_ID}`)
+    
     selection.removeAllRanges()
-    selection.addRange(savedRangeRef.current)
+    
+    if (markerSpan) {
+      // Select the marker span's contents
+      const range = document.createRange()
+      range.selectNodeContents(markerSpan)
+      selection.addRange(range)
+    } else if (savedRangeRef.current) {
+      // Fallback to saved range
+      try {
+        selection.addRange(savedRangeRef.current)
+      } catch (e) {
+        blockRef.contentEditable = 'false'
+        return
+      }
+    } else {
+      blockRef.contentEditable = 'false'
+      return
+    }
     
     // Apply formatting
-    document.execCommand(command, false)
+    if (value !== undefined) {
+      document.execCommand(command, false, value)
+    } else {
+      document.execCommand(command, false)
+    }
     
-    // Get updated content
-    const content = blockRef.innerHTML
+    // Get updated content - strip marker span ID from content before saving
+    // The marker span wraps the selected text, we need to remove just the span tags, keeping contents
+    let content = blockRef.innerHTML
     
-    // Make non-editable again
-    blockRef.contentEditable = 'false'
+    // Remove the marker span tags but keep inner content
+    const markerRegex = new RegExp(`<span\\s+id="${SELECTION_MARKER_ID}"[^>]*>(.*?)</span>`, 'gs')
+    const cleanContent = content.replace(markerRegex, '$1')
     
-    // Save to database
+    // Keep toolbar open for color picker and font size, re-select the text for next change
+    if (command === 'foreColor' || command === 'hiliteColor' || command === 'fontSize') {
+      // Keep block editable temporarily to re-establish selection
+      blockRef.contentEditable = 'true'
+      
+      // Re-select the same range
+      const newSelection = window.getSelection()
+      if (newSelection && savedRangeRef.current) {
+        try {
+          newSelection.removeAllRanges()
+          newSelection.addRange(savedRangeRef.current)
+        } catch (e) {
+          // If range is invalid, select all content
+          const newRange = document.createRange()
+          newRange.selectNodeContents(blockRef)
+          newSelection.removeAllRanges()
+          newSelection.addRange(newRange)
+          savedRangeRef.current = newRange.cloneRange()
+        }
+      }
+      
+      blockRef.contentEditable = 'false'
+    } else {
+      // Make non-editable for other commands
+      blockRef.contentEditable = 'false'
+    }
+    
+    // Save to database with cleaned content (no marker span)
     try {
       const response = await fetch(`/api/blocks/${selectedBlockId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content: cleanContent }),
       })
-
+      
       if (response.ok) {
         const updated: ContentBlock = await response.json()
         setPage(page && {
@@ -238,7 +411,13 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
       console.error('Error saving formatting:', error)
     }
     
-    // Hide toolbar and clear saved range
+    // Keep toolbar open for color picker and font size, hide for other commands
+    if (command === 'foreColor' || command === 'hiliteColor' || command === 'fontSize') {
+      // Keep toolbar visible and selection active for color picker and font size
+      return
+    }
+    
+    // Hide toolbar for other commands
     hideFloatingToolbar()
   }
 
@@ -515,6 +694,19 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
         <h1 className="text-4xl font-bold text-gray-900 dark:text-gray-100">
           {page.title}
         </h1>
+        {highlightTerm && (
+          <div className="mt-3 flex items-center gap-3 text-sm">
+            <span className="text-gray-600 dark:text-gray-400">
+              Highlighting: <mark className="bg-yellow-300 dark:bg-yellow-600 px-1 rounded">{highlightTerm}</mark>
+            </span>
+            <button
+              onClick={() => onClearHighlight?.()}
+              className="text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              Clear highlight
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Content Blocks */}
@@ -560,7 +752,7 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
                 {editingBlockId === block.id ? (
                   <div className="space-y-3">
                     {/* Rich Text Toolbar */}
-                    <div className="flex gap-1 p-2 bg-gray-100 dark:bg-gray-700 rounded-lg border border-gray-300 dark:border-gray-600">
+                    <div className="flex gap-1 p-2 bg-gray-100 dark:bg-gray-700 rounded-lg border border-gray-300 dark:border-gray-600 flex-wrap">
                       <button
                         type="button"
                         onMouseDown={(e) => {
@@ -594,6 +786,94 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
                       >
                         U
                       </button>
+                      <div className="w-px bg-gray-300 dark:bg-gray-600 mx-1"></div>
+                      
+                      {/* Font Size Dropdown */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setShowFontSizeDropdown(!showFontSizeDropdown)}
+                          className="px-3 py-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded text-gray-900 dark:text-gray-100 flex items-center gap-1"
+                          title="Font Size"
+                        >
+                          <span>A</span>
+                          <span className="text-xs">▼</span>
+                        </button>
+                        {showFontSizeDropdown && (
+                          <div className="absolute top-full left-0 mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg z-50 py-1 min-w-[120px]">
+                            {[1, 2, 3, 4, 5, 6, 7].map((size) => (
+                              <button
+                                key={size}
+                                type="button"
+                                onMouseDown={(e) => {
+                                  e.preventDefault()
+                                  formatText('fontSize', size.toString())
+                                  setShowFontSizeDropdown(false)
+                                }}
+                                className="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-gray-100"
+                                style={{ fontSize: `${8 + size * 2}px` }}
+                              >
+                                Size {size}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      
+                      {/* Color Picker */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setShowColorPicker(!showColorPicker)}
+                          className="px-3 py-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded text-gray-900 dark:text-gray-100"
+                          title="Text Color"
+                        >
+                          🎨
+                        </button>
+                        {showColorPicker && (
+                          <div className="absolute top-full left-0 mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg z-50 p-3 w-56">
+                            <div className="grid grid-cols-5 gap-2 mb-2">
+                              {[
+                                { name: 'Black', value: '#000000' },
+                                { name: 'Red', value: '#EF4444' },
+                                { name: 'Orange', value: '#F97316' },
+                                { name: 'Yellow', value: '#EAB308' },
+                                { name: 'Green', value: '#22C55E' },
+                                { name: 'Blue', value: '#3B82F6' },
+                                { name: 'Indigo', value: '#6366F1' },
+                                { name: 'Purple', value: '#A855F7' },
+                                { name: 'Pink', value: '#EC4899' },
+                                { name: 'Gray', value: '#6B7280' },
+                              ].map((color) => (
+                                <button
+                                  key={color.value}
+                                  type="button"
+                                  onMouseDown={(e) => {
+                                    e.preventDefault()
+                                    formatText('foreColor', color.value)
+                                    setShowColorPicker(false)
+                                  }}
+                                  className="w-9 h-9 rounded border-2 border-gray-300 dark:border-gray-600 hover:scale-110 transition-transform flex-shrink-0"
+                                  style={{ backgroundColor: color.value }}
+                                  title={color.name}
+                                />
+                              ))}
+                            </div>
+                            <button
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                formatText('removeFormat')
+                                setShowColorPicker(false)
+                              }}
+                              className="w-full px-3 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded text-sm text-gray-900 dark:text-gray-100 font-medium"
+                            >
+                              ✕ Remove Color
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      
                       <div className="w-px bg-gray-300 dark:bg-gray-600 mx-1"></div>
                       <button
                         type="button"
@@ -676,7 +956,7 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
                           contentEditable
                           onInput={handleEditorInput}
                           className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:border-blue-600 dark:focus:border-blue-500 bg-white dark:bg-gray-800 min-h-[80px] max-h-[500px] overflow-y-auto prose dark:prose-invert max-w-none prose-headings:text-gray-900 dark:prose-headings:text-gray-100 prose-p:text-gray-900 dark:prose-p:text-gray-100"
-                          style={{ wordBreak: 'break-word' }}
+                          style={{ wordBreak: 'break-word', overflowWrap: 'break-word', wordWrap: 'break-word' }}
                         />
                       </div>
                       
@@ -686,7 +966,7 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
                           <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
                             {block.attachment.mimeType.startsWith('image/') ? (
                               <img 
-                                src={block.attachment.path} 
+                                src={`/api/files/${block.attachment.id}`}
                                 alt={block.attachment.filename}
                                 className="w-full h-32 object-cover"
                               />
@@ -752,7 +1032,8 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
                         ref={(el) => { blockRefs.current[block.id] = el }}
                         onMouseUp={() => handleTextSelection(block.id)}
                         className="prose dark:prose-invert max-w-none prose-headings:text-gray-900 dark:prose-headings:text-gray-100 prose-p:text-gray-900 dark:prose-p:text-gray-100 cursor-text prose-a:text-blue-600 dark:prose-a:text-blue-400 prose-a:no-underline hover:prose-a:underline"
-                        dangerouslySetInnerHTML={{ __html: linkifyContent(block.content) || '<p class="text-gray-400 dark:text-gray-500 italic">Empty block - click edit to add content</p>' }}
+                        style={{ wordBreak: 'break-word', overflowWrap: 'break-word', wordWrap: 'break-word' }}
+                        dangerouslySetInnerHTML={{ __html: highlightSearchTerm(linkifyContent(block.content), highlightTerm) || '<p class="text-gray-400 dark:text-gray-500 italic">Empty block - click edit to add content</p>' }}
                       />
                     </div>
                     
@@ -768,7 +1049,7 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
                               className="cursor-pointer"
                             >
                               <img 
-                                src={block.attachment.path} 
+                                src={`/api/files/${block.attachment.id}`}
                                 alt={block.attachment.filename}
                                 className="w-full h-40 object-cover"
                               />
@@ -978,7 +1259,7 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
       <div
         ref={floatingToolbarRef}
         data-floating-toolbar
-        className="fixed z-50 gap-1 p-2 bg-gray-900 dark:bg-gray-100 rounded-lg shadow-xl border border-gray-700 dark:border-gray-300"
+        className="fixed z-50 flex gap-1 p-2 bg-gray-900 dark:bg-gray-100 rounded-lg shadow-xl border border-gray-700 dark:border-gray-300"
         style={{ display: 'none' }}
       >
         <button
@@ -1017,6 +1298,205 @@ export default function PageContent({ pageId, pendingBlockId, onBlockScrolled, o
         >
           U
         </button>
+        
+        {/* Font Size Controls */}
+        <div className="flex items-center gap-1 border-l border-gray-600 dark:border-gray-400 pl-2 ml-1">
+          {/* Decrease font size */}
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              const currentSize = getCurrentFontSize()
+              const newSize = Math.max(1, currentSize - 1).toString()
+              applyFloatingFormat('fontSize', newSize)
+            }}
+            className="px-2 py-1 hover:bg-gray-700 dark:hover:bg-gray-300 rounded text-white dark:text-gray-900 text-xs"
+            title="Decrease font size"
+          >
+            A-
+          </button>
+          
+          {/* Increase font size */}
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              const currentSize = getCurrentFontSize()
+              const newSize = Math.min(7, currentSize + 1).toString()
+              applyFloatingFormat('fontSize', newSize)
+            }}
+            className="px-2 py-1 hover:bg-gray-700 dark:hover:bg-gray-300 rounded text-white dark:text-gray-900 text-xs"
+            title="Increase font size"
+          >
+            A+
+          </button>
+          
+          {/* Font size dropdown */}
+          <div className="relative inline-block">
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setShowFontSizeDropdown(!showFontSizeDropdown)
+              }}
+              className="px-2 py-1 hover:bg-gray-700 dark:hover:bg-gray-300 rounded text-white dark:text-gray-900 text-xs flex items-center gap-1"
+              title="Font Size"
+            >
+              <span className="text-[10px]">▼</span>
+            </button>
+            
+            {showFontSizeDropdown && (
+              <div
+                className="absolute top-full mt-2 left-0 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-xl p-2 min-w-[120px] z-50"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                }}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                }}
+              >
+                {[
+                  { size: '1', label: 'Tiny' },
+                  { size: '2', label: 'Small' },
+                  { size: '3', label: 'Normal' },
+                  { size: '4', label: 'Medium' },
+                  { size: '5', label: 'Large' },
+                  { size: '6', label: 'Huge' },
+                  { size: '7', label: 'Massive' },
+                ].map(({ size, label }) => (
+                  <button
+                    key={size}
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      applyFloatingFormat('fontSize', size)
+                      setShowFontSizeDropdown(false)
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-gray-900 dark:text-gray-100 text-sm"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        
+        {/* Text Color Button */}
+        <div className="relative inline-block">
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              setShowColorPicker(!showColorPicker)
+            }}
+            className="px-3 py-1 hover:bg-gray-700 dark:hover:bg-gray-300 rounded text-white dark:text-gray-900 text-sm flex items-center gap-1"
+            title="Text Color"
+          >
+            <span className="font-bold">A</span>
+            <span className="text-xs">▼</span>
+          </button>
+          
+          {showColorPicker && (
+            <div
+              className="absolute top-full mt-2 left-0 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-xl p-3 grid grid-cols-5 gap-2 min-w-[200px]"
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              {[
+                { color: '#000000', name: 'Black' },
+                { color: '#EF4444', name: 'Red' },
+                { color: '#F97316', name: 'Orange' },
+                { color: '#EAB308', name: 'Yellow' },
+                { color: '#22C55E', name: 'Green' },
+                { color: '#3B82F6', name: 'Blue' },
+                { color: '#8B5CF6', name: 'Purple' },
+                { color: '#EC4899', name: 'Pink' },
+                { color: '#64748B', name: 'Gray' },
+                { color: '#FFFFFF', name: 'White' },
+              ].map(({ color, name }) => (
+                <button
+                  key={color}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    applyFloatingFormat('foreColor', color)
+                    // Don't close picker - let user try different colors
+                  }}
+                  className="w-8 h-8 rounded border-2 border-gray-300 dark:border-gray-600 hover:scale-110 transition-transform"
+                  style={{ backgroundColor: color }}
+                  title={name}
+                />
+              ))}
+              
+              {/* Reset to default */}
+              <button
+                type="button"
+                onMouseDown={async (e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  
+                  const selectedBlockId = selectedBlockIdRef.current
+                  if (!selectedBlockId) return
+                  
+                  const blockRef = blockRefs.current[selectedBlockId]
+                  if (!blockRef) return
+                  
+                  // Get just the text content without any HTML tags
+                  const textContent = blockRef.textContent || blockRef.innerText
+                  
+                  // Replace with plain text
+                  blockRef.innerHTML = textContent
+                  
+                  // Save to database
+                  try {
+                    const response = await fetch(`/api/blocks/${selectedBlockId}`, {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ content: textContent }),
+                    })
+                    
+                    if (response.ok) {
+                      const updated = await response.json()
+                      setPage(page && {
+                        ...page,
+                        blocks: page.blocks.map(b => b.id === selectedBlockId ? updated : b),
+                      })
+                    }
+                  } catch (error) {
+                    console.error('Error removing color:', error)
+                  }
+                  
+                  // Re-select the text
+                  setTimeout(() => {
+                    blockRef.contentEditable = 'true'
+                    const selection = window.getSelection()
+                    if (selection) {
+                      const range = document.createRange()
+                      range.selectNodeContents(blockRef)
+                      selection.removeAllRanges()
+                      selection.addRange(range)
+                      savedRangeRef.current = range.cloneRange()
+                    }
+                    blockRef.contentEditable = 'false'
+                  }, 10)
+                }}
+                className="col-span-5 mt-2 px-2 py-1 text-xs bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded hover:bg-gray-300 dark:hover:bg-gray-600"
+                title="Remove color"
+              >
+                Remove Color
+              </button>
+            </div>
+          )}
+        </div>
+        
         <button
           type="button"
           onMouseDown={(e) => {

@@ -10,6 +10,7 @@ build/
 
 # Uploads
 uploads/
+public/uploads/
 
 # Environment
 .env
@@ -19,6 +20,7 @@ uploads/
 # Logs
 *.log
 npm-debug.log*
+logs/
 
 # OS
 .DS_Store

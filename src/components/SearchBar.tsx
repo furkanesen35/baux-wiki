@@ -1,13 +1,19 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 
 export default function SearchBar() {
   const [search, setSearch] = useState('')
+  const router = useRouter()
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
-    window.location.href = `/?search=${encodeURIComponent(search)}`
+    if (search.trim()) {
+      router.push(`/?search=${encodeURIComponent(search.trim())}`)
+    } else {
+      router.push('/')
+    }
   }
 
   return (

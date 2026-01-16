@@ -7,8 +7,15 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "start:prod": "node server.js",
     "lint": "next lint",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "pm2:start": "npm run build && pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop baux-wiki",
+    "pm2:restart": "pm2 restart baux-wiki",
+    "pm2:delete": "pm2 delete baux-wiki",
+    "pm2:logs": "pm2 logs baux-wiki",
+    "pm2:monit": "pm2 monit"
   },
   "dependencies": {
     "@prisma/client": "^5.7.1",
