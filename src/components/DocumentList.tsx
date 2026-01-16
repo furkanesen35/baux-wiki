@@ -139,7 +139,7 @@ export default function DocumentList({
               e.stopPropagation()
               onCreateSubpage?.(doc.id, doc.title)
             }}
-            className="opacity-0 group-hover:opacity-100 text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 px-2 py-1 rounded hover:bg-blue-50 dark:hover:bg-blue-900/30 flex-shrink-0"
+            className="hidden group-hover:block text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 px-2 py-1 rounded hover:bg-blue-50 dark:hover:bg-blue-900/30 flex-shrink-0"
             title="Create subpage"
           >
             + Sub
@@ -149,7 +149,7 @@ export default function DocumentList({
               e.stopPropagation()
               handleDeletePage(doc.id, doc.title)
             }}
-            className="opacity-0 group-hover:opacity-100 text-xs text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-900/30 flex-shrink-0"
+            className="hidden group-hover:block text-xs text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-900/30 flex-shrink-0"
             title="Delete page"
           >
             🗑️
